@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, ChangeEvent, useRef, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { generateDecadeImage } from './services/geminiService';
 import PolaroidCard from './components/PolaroidCard';
 import { createAlbumPage } from './lib/albumUtils';
@@ -63,6 +63,10 @@ function App() {
     const [appState, setAppState] = useState<'idle' | 'image-uploaded' | 'generating' | 'results-shown'>('idle');
     const dragAreaRef = useRef<HTMLDivElement>(null);
     const isMobile = useMediaQuery('(max-width: 768px)');
+    
+    // API Key management
+    const [customApiKey, setCustomApiKey] = useState<string>('');
+    const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
 
 
     const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
@@ -78,9 +82,12 @@ function App() {
         }
     };
 
-    const handleGenerateClick = async () => {
+    const handleGenerateClick = () => {
         if (!uploadedImage) return;
+        setShowApiKeyModal(true);
+    };
 
+    const startGeneration = async () => {
         setIsLoading(true);
         setAppState('generating');
         
@@ -90,13 +97,15 @@ function App() {
         });
         setGeneratedImages(initialImages);
 
-        const concurrencyLimit = 2; // Process two decades at a time
+        // Process one decade at a time to respect free tier rate limits
+        const concurrencyLimit = 1; 
         const decadesQueue = [...DECADES];
 
         const processDecade = async (decade: string) => {
             try {
                 const prompt = `Reimagine the person in this photo in the style of the ${decade}. This includes clothing, hairstyle, photo quality, and the overall aesthetic of that decade. The output must be a photorealistic image showing the person clearly.`;
-                const resultUrl = await generateDecadeImage(uploadedImage, prompt);
+                // Pass customApiKey if available
+                const resultUrl = await generateDecadeImage(uploadedImage!, prompt, customApiKey || undefined);
                 setGeneratedImages(prev => ({
                     ...prev,
                     [decade]: { status: 'done', url: resultUrl },
@@ -145,7 +154,7 @@ function App() {
         // Call the generation service for the specific decade
         try {
             const prompt = `Reimagine the person in this photo in the style of the ${decade}. This includes clothing, hairstyle, photo quality, and the overall aesthetic of that decade. The output must be a photorealistic image showing the person clearly.`;
-            const resultUrl = await generateDecadeImage(uploadedImage, prompt);
+            const resultUrl = await generateDecadeImage(uploadedImage, prompt, customApiKey || undefined);
             setGeneratedImages(prev => ({
                 ...prev,
                 [decade]: { status: 'done', url: resultUrl },
@@ -164,6 +173,7 @@ function App() {
         setUploadedImage(null);
         setGeneratedImages({});
         setAppState('idle');
+        setCustomApiKey(''); // Optional: clear key on reset
     };
 
     const handleDownloadIndividualImage = (decade: string) => {
@@ -181,10 +191,10 @@ function App() {
     const handleDownloadAlbum = async () => {
         setIsDownloading(true);
         try {
-            const imageData = Object.entries(generatedImages)
+            const imageData = (Object.entries(generatedImages) as [string, GeneratedImage][])
                 .filter(([, image]) => image.status === 'done' && image.url)
                 .reduce((acc, [decade, image]) => {
-                    acc[decade] = image!.url!;
+                    acc[decade] = image.url!;
                     return acc;
                 }, {} as Record<string, string>);
 
@@ -348,6 +358,74 @@ function App() {
                     </>
                 )}
             </div>
+
+            {/* API Key Modal */}
+            <AnimatePresence>
+                {showApiKeyModal && (
+                    <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+                    >
+                        <motion.div 
+                            initial={{ scale: 0.9, y: 20 }}
+                            animate={{ scale: 1, y: 0 }}
+                            exit={{ scale: 0.9, y: 20 }}
+                            className="bg-neutral-900 border border-neutral-800 p-6 rounded-lg max-w-md w-full shadow-2xl relative"
+                        >
+                            <h2 className="text-2xl font-caveat font-bold text-yellow-400 mb-4">Unlock Faster Generation</h2>
+                            <p className="text-neutral-300 mb-4 text-sm leading-relaxed">
+                                Enter your own free Gemini API Key to bypass shared rate limits and generate images faster. 
+                                <br/>
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-yellow-400/80 hover:text-yellow-400 underline decoration-dotted mt-1 inline-block">
+                                    Get a free API key here
+                                </a>
+                            </p>
+                            
+                            <div className="flex flex-col gap-4">
+                                <input
+                                    type="password"
+                                    value={customApiKey}
+                                    onChange={(e) => setCustomApiKey(e.target.value)}
+                                    placeholder="Paste your Gemini API Key here"
+                                    className="bg-neutral-800 border border-neutral-700 rounded p-3 text-white focus:outline-none focus:border-yellow-500 w-full transition-colors"
+                                />
+                                
+                                <div className="flex flex-col gap-2 mt-2">
+                                    <button 
+                                        onClick={() => {
+                                            setShowApiKeyModal(false);
+                                            startGeneration();
+                                        }}
+                                        disabled={!customApiKey.trim()}
+                                        className={`w-full py-3 rounded font-bold transition-all ${
+                                            customApiKey.trim() 
+                                            ? 'bg-yellow-400 text-black hover:bg-yellow-300 hover:scale-[1.02]' 
+                                            : 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
+                                        }`}
+                                    >
+                                        Generate with My Key
+                                    </button>
+                                    
+                                    <button 
+                                        onClick={() => {
+                                            setShowApiKeyModal(false);
+                                            // Ensure we use the default key if they skip
+                                            setCustomApiKey(''); 
+                                            startGeneration();
+                                        }}
+                                        className="w-full py-2 text-neutral-500 hover:text-neutral-300 text-sm transition-colors"
+                                    >
+                                        I don't have a key (Use Default)
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+            
             <Footer />
         </main>
     );

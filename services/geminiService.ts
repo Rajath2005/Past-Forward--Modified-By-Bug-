@@ -5,14 +5,7 @@
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
 
-const API_KEY = process.env.API_KEY;
-
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
-
+const DEFAULT_API_KEY = process.env.API_KEY;
 
 // --- Helper Functions ---
 
@@ -54,29 +47,39 @@ function processGeminiResponse(response: GenerateContentResponse): string {
 }
 
 /**
- * A wrapper for the Gemini API call that includes a retry mechanism for internal server errors.
+ * A wrapper for the Gemini API call that includes a retry mechanism for internal server errors
+ * and rate limiting errors (429).
+ * @param aiClient The initialized GoogleGenAI client.
  * @param imagePart The image part of the request payload.
  * @param textPart The text part of the request payload.
  * @returns The GenerateContentResponse from the API.
  */
-async function callGeminiWithRetry(imagePart: object, textPart: object): Promise<GenerateContentResponse> {
-    const maxRetries = 3;
-    const initialDelay = 1000;
+async function callGeminiWithRetry(aiClient: GoogleGenAI, imagePart: object, textPart: object): Promise<GenerateContentResponse> {
+    const maxRetries = 5; // Increased retries to better handle free tier rate limits
+    const initialDelay = 2000; // Increased initial delay
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            return await ai.models.generateContent({
+            return await aiClient.models.generateContent({
                 model: 'gemini-2.5-flash-image',
                 contents: { parts: [imagePart, textPart] },
             });
         } catch (error) {
             console.error(`Error calling Gemini API (Attempt ${attempt}/${maxRetries}):`, error);
             const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-            const isInternalError = errorMessage.includes('"code":500') || errorMessage.includes('INTERNAL');
+            
+            // Check for 500 (Internal) or 429 (Resource Exhausted/Too Many Requests)
+            const isRetryableError = 
+                errorMessage.includes('"code":500') || 
+                errorMessage.includes('INTERNAL') ||
+                errorMessage.includes('"code":429') || 
+                errorMessage.includes('RESOURCE_EXHAUSTED') ||
+                errorMessage.includes('Too Many Requests');
 
-            if (isInternalError && attempt < maxRetries) {
+            if (isRetryableError && attempt < maxRetries) {
+                // Exponential backoff: 2s, 4s, 8s, 16s...
                 const delay = initialDelay * Math.pow(2, attempt - 1);
-                console.log(`Internal error detected. Retrying in ${delay}ms...`);
+                console.log(`Retryable error detected (${isRetryableError ? 'Rate Limit/Internal' : 'Other'}). Retrying in ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 continue;
             }
@@ -93,14 +96,21 @@ async function callGeminiWithRetry(imagePart: object, textPart: object): Promise
  * It includes a fallback mechanism for prompts that might be blocked in certain regions.
  * @param imageDataUrl A data URL string of the source image (e.g., 'data:image/png;base64,...').
  * @param prompt The prompt to guide the image generation.
+ * @param userApiKey Optional. A specific API key to use for this request.
  * @returns A promise that resolves to a base64-encoded image data URL of the generated image.
  */
-export async function generateDecadeImage(imageDataUrl: string, prompt: string): Promise<string> {
+export async function generateDecadeImage(imageDataUrl: string, prompt: string, userApiKey?: string): Promise<string> {
   const match = imageDataUrl.match(/^data:(image\/\w+);base64,(.*)$/);
   if (!match) {
     throw new Error("Invalid image data URL format. Expected 'data:image/...;base64,...'");
   }
   const [, mimeType, base64Data] = match;
+
+    const key = userApiKey || DEFAULT_API_KEY;
+    if (!key) {
+        throw new Error("API_KEY is not set. Please provide a key or configure the environment.");
+    }
+    const ai = new GoogleGenAI({ apiKey: key });
 
     const imagePart = {
         inlineData: { mimeType, data: base64Data },
@@ -110,7 +120,7 @@ export async function generateDecadeImage(imageDataUrl: string, prompt: string):
     try {
         console.log("Attempting generation with original prompt...");
         const textPart = { text: prompt };
-        const response = await callGeminiWithRetry(imagePart, textPart);
+        const response = await callGeminiWithRetry(ai, imagePart, textPart);
         return processGeminiResponse(response);
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
@@ -129,7 +139,7 @@ export async function generateDecadeImage(imageDataUrl: string, prompt: string):
                 const fallbackPrompt = getFallbackPrompt(decade);
                 console.log(`Attempting generation with fallback prompt for ${decade}...`);
                 const fallbackTextPart = { text: fallbackPrompt };
-                const fallbackResponse = await callGeminiWithRetry(imagePart, fallbackTextPart);
+                const fallbackResponse = await callGeminiWithRetry(ai, imagePart, fallbackTextPart);
                 return processGeminiResponse(fallbackResponse);
             } catch (fallbackError) {
                 console.error("Fallback prompt also failed.", fallbackError);

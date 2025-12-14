@@ -35,12 +35,12 @@ const Footer = () => {
                     <p>
                         Created by{' '}
                         <a
-                            href="https://x.com/ammaar"
+                            href="https://github.com/rajath2005"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-neutral-400 hover:text-yellow-400 transition-colors duration-200"
                         >
-                            @ammaar
+                            Rajath kiran
                         </a>
                     </p>
                 </div>
